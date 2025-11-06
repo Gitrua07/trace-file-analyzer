@@ -1,5 +1,5 @@
 # trace-file-analyzer
 
-# How to Execute traceTester.py
+## How to Execute traceTester.py
 
 `` python3 traceTester.py <<file>>``
