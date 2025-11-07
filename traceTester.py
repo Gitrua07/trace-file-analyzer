@@ -3,9 +3,14 @@ import sys
 import IPPacket
 
 class Datagram:
-    def __init__(self, packet, payload):
-        self.src_addr = payload.src_ip
-        self.dest_addr = payload.dst_ip
+    def __init__(self, packet):
+        self.payload = packet.payload
+        self.src_addr = packet.src_ip
+        self.dest_addr = packet.dst_ip
+        self.src_port, self.dst_port = self.get_port()
+
+    def get_port(self):
+        return struct.unpack('!HH', self.payload[:4])
 
     def get_intermediate_addr(self):
         return f'0'
@@ -19,8 +24,10 @@ class Datagram:
 def parseData(packets):
     datagrams = []
     for packet in packets:
-        payload = packet[2]
-        temp = Datagram(packet, payload)
+        pack = packet[2]
+        temp = Datagram(pack)
+        datagrams.append(temp)
+    return datagrams
 
 
 def getCapFile(file):
@@ -70,17 +77,19 @@ def getCapFile(file):
     
     return ip_packet_list
 
-def getTrace():
+def getTrace(datagram):
     """
     getTrace(): Prints trace file information
 
     return:
     output: A string containing the trace file information
     """
+    src_addr = datagram.src_addr
+    dst_addr = datagram.dest_addr
     output = ''
 
-    output+= f'The IP address of the ultimate source node: \n'    
-    output+= f'The IP address of the ultimate destination node: \n'
+    output+= f'The IP address of the ultimate source node: {src_addr}\n'    
+    output+= f'The IP address of the ultimate destination node: {dst_addr}\n'
     output+= f'The IP addresses of the intermediate destination nodes: \n \n \n'
     output+= f'The values in the protocol field of IP headers: \n \n \n'
     output+= f'The number of fragments created from the original datagram is: \n'
@@ -92,7 +101,9 @@ def main() -> None:
     file = sys.argv[1]
     packet = getCapFile(file)
     datagram_list = parseData(packet)
-    #datagram = Datagram(packet)
+
+    for datagram in datagram_list:
+        print(getTrace(datagram))
 
 
 if __name__ == "__main__":
