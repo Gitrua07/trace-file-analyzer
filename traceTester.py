@@ -4,22 +4,15 @@ import IPPacket
 
 class Datagram:
     def __init__(self, packet):
+        self.packet = packet
         self.payload = packet.payload
         self.src_addr = packet.src_ip
         self.dest_addr = packet.dst_ip
+        self.protocol = packet.protocol
         self.src_port, self.dst_port = self.get_port()
 
     def get_port(self):
         return struct.unpack('!HH', self.payload[:4])
-
-    def get_intermediate_addr(self):
-        return f'0'
-    def get_protocol_field(self):
-        return f'0'
-    def get_num_fragments(self):
-        return f'0'
-    def get_offset(self):
-        return f'0'
 
 def parseData(packets):
     datagrams = []
@@ -94,16 +87,43 @@ def getTrace(datagram):
     output+= f'The values in the protocol field of IP headers: \n \n \n'
     output+= f'The number of fragments created from the original datagram is: \n'
     output+= f'The offset of the last fragment is: \n\n'
+    output+= f'The avg RTT between .. and .. is: .. ms, the s.d. is: .. ms \n'
 
     return output
+
+def parsePackets(datagram):
+    """
+    self.packet = packet
+        self.payload = packet.payload
+        self.src_addr = packet.src_ip
+        self.dest_addr = packet.dst_ip
+        self.protocol = packet.protocol
+        self.src_port, self.dst_port = self.get_port()
+    """
+    if datagram.protocol == 6 or datagram.protocol == 11:
+        #TCP connection and UDP connection
+        connection_to = (datagram.src_addr, datagram.src_port, datagram.dest_addr, datagram.dst_port)
+        connection_from = (datagram.dest_addr, datagram.dst_port, datagram.src_addr, datagram.src_port)
+    elif datagram.protocol == 1:
+        #ICMP connection
+        ip_header_length = (datagram.packet[0] & 0x0F) * 4
+        icmp_offset = 14 + ip_header_length
+        icmp = datagram.payload[icmp:icmp+8]
+        icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq = struct.unpack('!BBHHH', icmp)
+        connection_to = (datagram.src_addr, datagram.dest_addr, icmp_id + icmp_seq)
+    else:
+        print(f'Error: Protocol number unknown')
+        exit(1)
+
+    #connection_to = (datagram.)
 
 def main() -> None:
     file = sys.argv[1]
     packet = getCapFile(file)
     datagram_list = parseData(packet)
 
-    for datagram in datagram_list:
-        print(getTrace(datagram))
+    #for datagram in datagram_list:
+     #   print(getTrace(datagram))
 
 
 if __name__ == "__main__":
