@@ -2,8 +2,10 @@ import struct
 import sys
 import IPPacket
 
-class Datagram:
-    def __init__(self, packet):
+class Packet:
+    def __init__(self, ts_sec, ts_usec, packet):
+        self.ts_sec = ts_sec
+        self.ts_usec = ts_usec
         self.packet = packet
         self.payload = packet.payload
         self.src_addr = packet.src_ip
@@ -18,7 +20,9 @@ def parseData(packets):
     datagrams = []
     for packet in packets:
         pack = packet[2]
-        temp = Datagram(pack)
+        ts_sec = packet[0]
+        ts_usec = packet[1]
+        temp = Packet(ts_sec, ts_usec, pack)
         datagrams.append(temp)
     return datagrams
 
@@ -91,37 +95,54 @@ def getTrace(datagram):
 
     return output
 
-def parsePackets(datagram):
+def parseConnections(datagrams):
     """
-    self.packet = packet
-        self.payload = packet.payload
-        self.src_addr = packet.src_ip
-        self.dest_addr = packet.dst_ip
-        self.protocol = packet.protocol
-        self.src_port, self.dst_port = self.get_port()
-    """
-    if datagram.protocol == 6 or datagram.protocol == 11:
-        #TCP connection and UDP connection
-        connection_to = (datagram.src_addr, datagram.src_port, datagram.dest_addr, datagram.dst_port)
-        connection_from = (datagram.dest_addr, datagram.dst_port, datagram.src_addr, datagram.src_port)
-    elif datagram.protocol == 1:
-        #ICMP connection
-        ip_header_length = (datagram.packet[0] & 0x0F) * 4
-        icmp_offset = 14 + ip_header_length
-        icmp = datagram.payload[icmp:icmp+8]
-        icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq = struct.unpack('!BBHHH', icmp)
-        connection_to = (datagram.src_addr, datagram.dest_addr, icmp_id + icmp_seq)
-    else:
-        print(f'Error: Protocol number unknown')
-        exit(1)
+    parseConnections: Establishes all connections in datagram
 
-    #connection_to = (datagram.)
+    Returns: A list of connections
+    """
+    connections = {}
+    for datagram in datagrams:
+        if datagram.protocol == 6 or datagram.protocol == 17:
+            #TCP connection and UDP connection
+            connection_to = (datagram.src_addr, datagram.src_port, datagram.dest_addr, datagram.dst_port)
+            connection_from = (datagram.dest_addr, datagram.dst_port, datagram.src_addr, datagram.src_port)
+        elif datagram.protocol == 1:
+            #ICMP connection
+            ip_header_length = (datagram.packet[0] & 0x0F) * 4
+            icmp_offset = 14 + ip_header_length
+            icmp = datagram.payload[icmp:icmp+8]
+            icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq = struct.unpack('!BBHHH', icmp)
+            connection_to = (datagram.src_addr, datagram.dest_addr, icmp_id + icmp_seq)
+        elif datagram.protocol == 0:
+            return connections
+        else:
+            print(f'Error: Protocol number unknown')
+            exit(1)
+
+        if connection_to in connections:
+            connections[connection_to].append(datagram)
+        elif connection_from in connections:
+            connections[connection_from].append(datagram)
+        else:
+            connections[connection_to] = [datagram]
+    
+    return connections
+
+def getIntDest(connections):
+    for key, packets in connections.items():
+        for packet in packets:
+            print(packet.protocol)
+            if packet.protocol == 1:
+                print("ICMP")
+            
 
 def main() -> None:
     file = sys.argv[1]
     packet = getCapFile(file)
-    datagram_list = parseData(packet)
-
+    datagrams = parseData(packet)
+    connections = parseConnections(datagrams)
+    IntDests = getIntDest(connections) 
     #for datagram in datagram_list:
      #   print(getTrace(datagram))
 
