@@ -103,17 +103,20 @@ def parseConnections(datagrams):
     """
     connections = {}
     for datagram in datagrams:
+        print(f'{datagram.protocol}: datagram.protocol')
         if datagram.protocol == 6 or datagram.protocol == 17:
             #TCP connection and UDP connection
             connection_to = (datagram.src_addr, datagram.src_port, datagram.dest_addr, datagram.dst_port)
             connection_from = (datagram.dest_addr, datagram.dst_port, datagram.src_addr, datagram.src_port)
         elif datagram.protocol == 1:
             #ICMP connection
-            ip_header_length = (datagram.packet[0] & 0x0F) * 4
+            ip_header_length = (datagram.payload[0] & 0x0F) * 4
             icmp_offset = 14 + ip_header_length
-            icmp = datagram.payload[icmp:icmp+8]
-            icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq = struct.unpack('!BBHHH', icmp)
+            icmp = datagram.payload[icmp_offset:icmp_offset+8]
+            icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq = struct.unpack('!BBHHH', icmp[:8])
             connection_to = (datagram.src_addr, datagram.dest_addr, icmp_id + icmp_seq)
+            connection_from = 0
+            #connection_from = (datagram.src_addr, datagram.dest_addr, icmp_id + icmp_seq)
         elif datagram.protocol == 0:
             return connections
         else:
@@ -139,10 +142,18 @@ def getIntDest(connections):
 
 def main() -> None:
     file = sys.argv[1]
+    print("HERE 1")
     packet = getCapFile(file)
+    print(packet)
+    print("HERE 2")
     datagrams = parseData(packet)
+    print(datagrams)
+    print("HERE 3")
     connections = parseConnections(datagrams)
+    print(connections)
+    print("HERE 4")
     IntDests = getIntDest(connections) 
+    print("HERE 5")
     #for datagram in datagram_list:
      #   print(getTrace(datagram))
 
