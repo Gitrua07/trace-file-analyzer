@@ -74,24 +74,36 @@ def getCapFile(file):
     
     return ip_packet_list
 
-def getTrace(datagram):
+def getTrace(datagrams, fragCount):
     """
     getTrace(): Prints trace file information
 
     return:
     output: A string containing the trace file information
     """
-    src_addr = datagram.src_addr
-    dst_addr = datagram.dest_addr
+    frag_count = fragCount[0]
+    last_offset = fragCount[1]
+    src_addr = datagrams[0].src_addr
+    dst_addr = datagrams[len(datagrams)-1].dest_addr
     output = ''
 
     output+= f'The IP address of the ultimate source node: {src_addr}\n'    
     output+= f'The IP address of the ultimate destination node: {dst_addr}\n'
     output+= f'The IP addresses of the intermediate destination nodes: \n \n \n'
-    output+= f'The values in the protocol field of IP headers: \n \n \n'
-    output+= f'The number of fragments created from the original datagram is: \n'
-    output+= f'The offset of the last fragment is: \n\n'
-    output+= f'The avg RTT between .. and .. is: .. ms, the s.d. is: .. ms \n'
+    output+= f'The values in the protocol field of IP headers: \n'
+    protocol = []
+    for datagram in datagrams:
+        if datagram.protocol in protocol:
+            continue
+        if datagram.protocol == 1:
+            output+= f'1: ICMP\n'
+            protocol.append(1)
+        if datagram.protocol == 17:
+            output+= f'17: UDP\n'
+            protocol.append(17)
+    output+= f'\nThe number of fragments created from the original datagram is: {frag_count}\n'
+    output+= f'\nThe offset of the last fragment is: {last_offset}\n\n'
+    output+= f'\nThe avg RTT between .. and .. is: .. ms, the s.d. is: .. ms \n'
 
     return output
 
@@ -103,22 +115,29 @@ def parseConnections(datagrams):
     """
     connections = {}
     for datagram in datagrams:
-        print(f'{datagram.protocol}: datagram.protocol')
         if datagram.protocol == 6 or datagram.protocol == 17:
             #TCP connection and UDP connection
             connection_to = (datagram.src_addr, datagram.src_port, datagram.dest_addr, datagram.dst_port)
             connection_from = (datagram.dest_addr, datagram.dst_port, datagram.src_addr, datagram.src_port)
         elif datagram.protocol == 1:
+            continue
+        #Work on this later
             #ICMP connection
-            ip_header_length = (datagram.payload[0] & 0x0F) * 4
-            icmp_offset = 14 + ip_header_length
+            #print(datagram.payload.hex())
+            ip_header_length = (datagram.payload[8] & 0x0F) * 4
+            icmp_offset = 8 + ip_header_length
             icmp = datagram.payload[icmp_offset:icmp_offset+8]
-            icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq = struct.unpack('!BBHHH', icmp[:8])
+
+            if len(icmp) < 8:
+                continue
+
+            icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq =\
+                struct.unpack('!BBHHH', icmp[:8])
             connection_to = (datagram.src_addr, datagram.dest_addr, icmp_id + icmp_seq)
             connection_from = 0
             #connection_from = (datagram.src_addr, datagram.dest_addr, icmp_id + icmp_seq)
         elif datagram.protocol == 0:
-            return connections
+            continue
         else:
             print(f'Error: Protocol number unknown')
             exit(1)
@@ -135,25 +154,45 @@ def parseConnections(datagrams):
 def getIntDest(connections):
     for key, packets in connections.items():
         for packet in packets:
-            print(packet.protocol)
             if packet.protocol == 1:
-                print("ICMP")
+                ip_header_length = (packet.payload[8] & 0x0F) * 4
+                icmp_offset = 8 + ip_header_length
+                icmp = packet.payload[icmp_offset:icmp_offset+8]
+                icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq = struct.unpack('!BBHHH', icmp[:8])
+                #print(icmp_type)
+                if icmp_type == 11:
+                    print("TIME EXCEEDED")
             
+def getFragments(datagrams):
+    frag_count = 0
+    fragment_num = []
+    last_offset = -1
+    for datagram in datagrams:
+        ip_header = datagram.payload[14:34]
+        identification_bytes = ip_header[4:6]
+        result = struct.unpack('!H', identification_bytes)[0]
+        frag_field = datagram.payload[14 + 6: 14 + 8]
+        flags_and_offset = struct.unpack("!H", frag_field)[0]
+        fragment_offset = flags_and_offset & 0x1FFF
+
+        if result not in fragment_num:
+            fragment_num.append(result)
+            frag_count += 1
+        
+        if result == 0 and fragment_offset != 0:
+            last_offset = fragment_offset
+            break
+
+    return (frag_count, last_offset)
 
 def main() -> None:
     file = sys.argv[1]
-    print("HERE 1")
     packet = getCapFile(file)
-    print(packet)
-    print("HERE 2")
     datagrams = parseData(packet)
-    print(datagrams)
-    print("HERE 3")
     connections = parseConnections(datagrams)
-    print(connections)
-    print("HERE 4")
-    IntDests = getIntDest(connections) 
-    print("HERE 5")
+    IntDests = getIntDest(connections)
+    fragCount = getFragments(datagrams)
+    print(getTrace(datagrams, fragCount))
     #for datagram in datagram_list:
      #   print(getTrace(datagram))
 
