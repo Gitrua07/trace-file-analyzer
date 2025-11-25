@@ -199,29 +199,45 @@ def getIntDest(connections):
                     
             
 def getFragments(datagrams):
-    frag_count = 0
-    fragment_num = []
-    last_offset = -1
+    fragment_num = {}
     timesteps = []
     for datagram in datagrams:
-        ip_header = datagram.payload[14:34]
-        identification_bytes = ip_header[4:6]
-        result = struct.unpack('!H', identification_bytes)[0]
-        frag_field = datagram.payload[14 + 6: 14 + 8]
-        flags_and_offset = struct.unpack("!H", frag_field)[0]
-        fragment_offset = flags_and_offset & 0x1FFF
+        payload = datagram.payload
 
-        if result not in fragment_num:
+        if len(payload) < 20:
+            continue
+
+        ip_header = payload
+        first = ip_header[0]
+
+        if first < 0x45 or first > 0x4F:
+            continue
+        
+        ip_header = payload[:20]
+
+        result = struct.unpack('!H', ip_header[4:6])[0]
+        
+        flags_and_offset = struct.unpack("!H", ip_header[6:8])[0]
+
+        fragment_offset = flags_and_offset & 0x1FFF
+        mf_flag = flags_and_offset & 0x2000 #MF Flag
+
+        if mf_flag != 0 or fragment_offset > 0:
             time = datagram.ts_sec + datagram.ts_usec / 1_000_000
             timesteps.append((time, datagram.src_addr, datagram.dest_addr))
-            fragment_num.append(result)
-            frag_count += 1
-        
-        if result == 0 and fragment_offset != 0:
-            last_offset = fragment_offset
-            break
+            fragment_num.setdefault(result, []).append((fragment_offset, mf_flag))
 
-    return (frag_count, last_offset, timesteps)
+    if len(fragment_num) == 0:
+        return (1,0,timesteps)
+
+    ident = next(iter(fragment_num))
+    frag_list = fragment_num[ident]
+
+    num_frags = len(frag_list)
+
+    last_offset = max(ofs for ofs, mf in frag_list)
+
+    return (num_frags, last_offset, timesteps)
 
 def getRTT(connections):
     probe_send_times = {}
