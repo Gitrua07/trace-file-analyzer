@@ -2,27 +2,38 @@ import struct
 import sys
 import IPPacket
 
+#Class initializes packet field values
 class Packet:
-    def __init__(self, ts_sec, ts_usec, packet):
+    def __init__(self, ts_sec, ts_usec, packet, raw_bytes):
         self.ts_sec = ts_sec
         self.ts_usec = ts_usec
-        self.packet = packet
-        self.payload = packet.payload
+        self.packet = packet              # IPPacket object
+        self.raw = raw_bytes              # REAL IP bytes
+        self.ip_header = raw_bytes[:packet.header_length]  # REAL IP header
+        self.payload = packet.payload     # transport payload (ICMP/UDP)
         self.src_addr = packet.src_ip
         self.dest_addr = packet.dst_ip
         self.protocol = packet.protocol
         self.src_port, self.dst_port = self.get_port()
+        self.ttl = self.ip_header[8]
+        self.icmp_payload = packet.payload
+        self.original_ip_header = self.icmp_payload[8:28]
+        self.icmp_ttl = self.original_ip_header[8]
 
     def get_port(self):
         return struct.unpack('!HH', self.payload[:4])
 
 def parseData(packets):
+    """
+    Initializes packet fields into list 
+
+    Returns:
+        datagrams: a list of packets that are Packet objects
+    """
     datagrams = []
     for packet in packets:
-        pack = packet[2]
-        ts_sec = packet[0]
-        ts_usec = packet[1]
-        temp = Packet(ts_sec, ts_usec, pack)
+        ts_sec, ts_usec, ip_packet, raw_bytes = packet
+        temp = Packet(ts_sec, ts_usec, ip_packet, raw_bytes)
         datagrams.append(temp)
     return datagrams
 
@@ -97,11 +108,11 @@ def getCapFile(file):
                 continue
 
             ip_packet = IPPacket.IPPacket.from_bytes(ip_data)
-            ip_packet_list.append((ts_sec, ts_usec, ip_packet))
+            ip_packet_list.append((ts_sec, ts_usec, ip_packet, ip_data))
 
     return ip_packet_list
 
-def getTrace(datagrams, fragCount, rttCount, IntDests, sdCount):
+def getTrace(datagrams, fragCount, rttCount, IntDests):
     """
     getTrace(): Prints trace file information
 
@@ -111,15 +122,21 @@ def getTrace(datagrams, fragCount, rttCount, IntDests, sdCount):
     frag_count = fragCount[0]
     last_offset = fragCount[1]
     src_addr = datagrams[0].src_addr
-    dst_addr = datagrams[len(datagrams)-1].dest_addr
+    dst_addr = datagrams[0].dest_addr
     output = ''
 
     output+= f'The IP address of the ultimate source node: {src_addr}\n'    
     output+= f'The IP address of the ultimate destination node: {dst_addr}\n'
-    output+= f'The IP addresses of the intermediate destination nodes: \n'
-    for x in range(0,len(IntDests)):
-        output += f'router {x+1}: {IntDests[x]}\n'
     
+    #Outputs the intermediate destination nodes
+    output+= f'The IP addresses of the intermediate destination nodes: \n'
+    counter = 1
+    for k, ip in sorted(IntDests.items()):
+        for x in range(0, len(ip)):
+            output+= f'router {counter}: {ip[x]} (TTL={k})\n'
+            counter += 1
+
+    #Outputs the values of the protocol fields
     output+= f'\nThe values in the protocol field of IP headers: \n'
     protocol = []
     for datagram in datagrams:
@@ -131,183 +148,178 @@ def getTrace(datagrams, fragCount, rttCount, IntDests, sdCount):
         if datagram.protocol == 17:
             output+= f'17: UDP\n'
             protocol.append(17)
+    
+    #Outputs fragment information
     output+= f'\nThe number of fragments created from the original datagram is: {frag_count}\n'
     output+= f'\nThe offset of the last fragment is: {last_offset}\n\n'
-    for key1,rtt in rttCount.items():
-        avg = sum(rtt)/len(rtt)
-        output+= f'\nThe avg RTT between {key1[0]} and {key1[1]} is: {avg} ms, the s.d. is: {sdCount[key1]} ms \n'
+
+    #Outputs rtt and sd average between ip addresses
+    sorted_rtt = sorted(rttCount.items())
+    rtt_avgs = []
+    hop_rtt = {}
+    for hop, list_rtt in sorted_rtt:
+        rtt_row = []
+        dest_ip = list_rtt[0][0]
+
+        for ip, rtt in list_rtt:
+            rtt_row.append(rtt)
+
+        rtt_avg = sum(rtt_row)/len(rtt_row)
+        rtt_avgs.append(rtt_avg)
+        
+        if len(rtt_row) > 1:
+            mean = rtt_avg
+            variance = sum((x - mean) ** 2 for x in rtt_row) / len(rtt_row)
+            sd = variance ** 0.5
+        else:
+            sd = 0.0
+        
+        hop_rtt[hop] = rtt_avg
+        output += f"The avg RTT between {src_addr} and {dest_ip} is: {rtt_avg:.6f} ms, the s.d. is: {sd:.6f} ms\n"
+    
+    #Outputs trace and hop table
+    output+= f"\n{'TTL':<5}{'Average RTT in this Trace File (ms)':>10}\n"
+    for hop, rtt in hop_rtt.items():
+        output+= f"{hop:<5}{rtt:>10.2f}\n"
 
     return output
 
-def parseConnections(datagrams):
+def getIntDest(datagrams):
     """
-    parseConnections: Establishes all connections in datagram
+    Determines the number of intermediate destination addresses and obtains
+    address and rtt count by finding outgoing packets and getting their
+    ttl.
 
-    Returns: A list of connections
+    Returns:
+        int_addrs: A dict of intermediate address sorted by hop numbers
+        rttCount: A dict of rtt count sorted by hop numbers and containing
+        the ip address and rtt count
     """
-    connections = {}
-    rtt_time = {}
-    for datagram in datagrams:
-        if datagram.protocol == 6 or datagram.protocol == 17:
-            #TCP connection and UDP connection
-            connection_to = (datagram.src_addr, datagram.src_port, datagram.dest_addr, datagram.dst_port)
-            connection_from = (datagram.dest_addr, datagram.dst_port, datagram.src_addr, datagram.src_port)
-        elif datagram.protocol == 1:
-            ip_header_length = (datagram.payload[8] & 0x0F) * 4
-            icmp_offset = 8 + ip_header_length
-            icmp = datagram.payload[icmp_offset:icmp_offset+8]
+    int_addrs = {}
+    rttCount = {}
 
-            if len(icmp) < 8:
+    my_ip = None
+    for p in datagrams:
+        #Checks to see if the packet is UDP
+        if p.protocol == 17:  
+            my_ip = p.src_addr
+            break
+
+    if my_ip is None:
+        return (int_addrs, rttCount) 
+
+    probes_by_dstport = {}
+
+    for packet in datagrams:
+        #Outgoing UDP traceroute probe
+        if packet.protocol == 17 and packet.src_addr == my_ip:
+            if len(packet.payload) < 4:
                 continue
+            srcp, dstp = struct.unpack("!HH", packet.payload[:4])
+            probes_by_dstport[dstp] = packet
 
-            icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq =\
-                struct.unpack('!BBHHH', icmp[:8])
-            connection_to = (datagram.src_addr, datagram.dest_addr, icmp_id + icmp_seq)
-            connection_from = 0
-        elif datagram.protocol == 0:
+
+    for packet in datagrams:
+
+        if packet.protocol != 1:
             continue
-        else:
-            print(f'Error: Protocol number unknown')
-            exit(1)
 
-        if connection_to in connections:
-            connections[connection_to].append(datagram)
-        elif connection_from in connections:
-            connections[connection_from].append(datagram)
-        else:
-            connections[connection_to] = [datagram]
-    
-    return connections
+        icmp_type = packet.payload[0]
 
-def getIntDest(connections):
-    int_addrs = []
-    T = 0
-    for key, packets in connections.items():
-        for packet in packets:
-            if packet.protocol == 1:
-                
-                if len(packet.payload) < 8:
-                    continue
+        #Checking if the ICMP is returning the time-exceeded
+        if icmp_type != 11:
+            continue
+        
+        #Length of ip header
+        ihl = (packet.icmp_payload[8] & 0x0F) * 4
+        #Where udp header begins
+        udp_offset = 8 + ihl
 
-                icmp_type, icmp_code, icmp_checksum, icmp_id, icmp_seq = struct.unpack('!BBHHH', packet.payload[:8])
-                if icmp_type == 11:
-                    int_addr = packet.dest_addr
-                    int_addrs.append(int_addr)
-                    T = packet.ts_sec + packet.ts_usec / 1_000_000
-    
-    return (int_addrs, T)
+        #Contains udp header
+        udp_header = packet.icmp_payload[udp_offset : udp_offset + 8]
+
+        src_udp_p, dst_udp_p = struct.unpack("!HH", udp_header[:4])
+
+        if dst_udp_p not in probes_by_dstport:
+            continue
+        
+        #Obtains outgoing packet
+        probe = probes_by_dstport[dst_udp_p]
+
+        hop = probe.ttl                   
+        router_ip = packet.src_addr        
+
+        #Calculates rtt time
+        send_time = probe.ts_sec + probe.ts_usec / 1e9
+        recv_time = packet.ts_sec + packet.ts_usec / 1e9
+        rtt = (recv_time - send_time) * 1000 
+
+        if hop not in rttCount:
+            rttCount[(hop)] = []
+        rttCount[hop].append((router_ip, rtt))
+        
+        #Store intermediate address based on hops
+        if hop not in int_addrs:
+            int_addrs[hop] = [router_ip]
+        elif router_ip not in int_addrs[hop]:
+            int_addrs[hop].append(router_ip)
+
+    return (int_addrs, rttCount)
                     
             
 def getFragments(datagrams):
-    fragment_num = {}
-    timesteps = []
-    for datagram in datagrams:
-        payload = datagram.payload
+    """
+    Calculates the number of fragments in the datagram
 
-        if len(payload) < 20:
+    Returns:
+        num_frags: Number of fragments in the datagram
+        last_offset: Last offset of the last fragment
+    """
+    fragment_map = {}
+    timestamps = []
+
+    for d in datagrams:
+        ip_header = d.ip_header
+        if len(ip_header) < 8:
             continue
 
-        ip_header = payload
-        first = ip_header[0]
+        ident = struct.unpack('!H', ip_header[4:6])[0]
 
-        if first < 0x45 or first > 0x4F:
-            continue
-        
-        ip_header = payload[:20]
-
-        result = struct.unpack('!H', ip_header[4:6])[0]
-        
-        flags_and_offset = struct.unpack("!H", ip_header[6:8])[0]
-
+        flags_and_offset = struct.unpack('!H', ip_header[6:8])[0]
         fragment_offset = flags_and_offset & 0x1FFF
-        mf_flag = flags_and_offset & 0x2000 #MF Flag
+        mf_flag = flags_and_offset & 0x2000
 
-        if mf_flag != 0 or fragment_offset > 0:
-            time = datagram.ts_sec + datagram.ts_usec / 1_000_000
-            timesteps.append((time, datagram.src_addr, datagram.dest_addr))
-            fragment_num.setdefault(result, []).append((fragment_offset, mf_flag))
+        #Detect outer fragments only
+        if mf_flag or fragment_offset > 0:
+            t = d.ts_sec + d.ts_usec / 1_000_000
+            timestamps.append((ident, t, d.src_addr, d.dest_addr))
+            fragment_map.setdefault(ident, []).append((fragment_offset, mf_flag))
 
-    if len(fragment_num) == 0:
-        return (1,0,timesteps)
+    if not fragment_map:
+        return (0, 0, [])
 
-    ident = next(iter(fragment_num))
-    frag_list = fragment_num[ident]
+    #Find the packet with the most fragments
+    ident = max(fragment_map, key=lambda k: len(fragment_map[k]))
+    frag_list = fragment_map[ident]
 
     num_frags = len(frag_list)
+    last_offset = max(offset for offset, mf in frag_list)
 
-    last_offset = max(ofs for ofs, mf in frag_list)
-
-    return (num_frags, last_offset, timesteps)
-
-def getRTT(connections):
-    probe_send_times = {}
-    rtt_list = {}
-
-    for key, packets in connections.items():
-        for p in packets:
-            if p.protocol in (17, 6):
-
-                probe_key = (p.src_addr, p.src_port,
-                             p.dest_addr, p.dst_port)
-
-                send_time = p.ts_sec + p.ts_usec / 1e6
-                probe_send_times[probe_key] = send_time
-
-        for p in packets:
-            if p.protocol == 1:  
-
-                icmp_type = p.payload[0]
-                if icmp_type not in (11, 3):
-                    continue
-
-                icmp_payload = p.payload
-                if len(icmp_payload) < 36:
-                    continue  
-
-                orig_ip = icmp_payload[8:28]
-                orig_udp = icmp_payload[28:36]
-
-                orig_src_ip = f"{orig_ip[12]}.{orig_ip[13]}.{orig_ip[14]}.{orig_ip[15]}"
-                orig_dst_ip = f"{orig_ip[16]}.{orig_ip[17]}.{orig_ip[18]}.{orig_ip[19]}"
-                orig_src_port, orig_dst_port = struct.unpack("!HH", orig_udp[:4])
-
-                probe_key = (orig_src_ip, orig_src_port,
-                             orig_dst_ip, orig_dst_port)
-
-                if probe_key not in probe_send_times:
-                    continue 
-
-                send_time = probe_send_times[probe_key]
-                recv_time = p.ts_sec + p.ts_usec / 1e6
-                rtt = recv_time - send_time
-
-                router_ip = (p.src_addr, p.dest_addr)
-                rtt_list.setdefault(router_ip, []).append(rtt)
-
-    return rtt_list
-
-def getSD(rttCount):
-    sd_list = {}
-    for key, rtt in rttCount.items():
-        m = sum(rtt)/len(rtt)
-        variance = sum((x-m) ** 2 for x in rtt)/len(rtt)
-        sd = variance ** 0.5
-        sd_list[key] = sd
-
-    return sd_list
-    
-
+    return (num_frags, last_offset) 
 
 def main() -> None:
+    #Initalize file input
     file = sys.argv[1]
+    #Obtains packet from file
     packet = getCapFile(file)
-    datagrams = parseData(packet)
-    connections = parseConnections(datagrams)
-    IntDests, T = getIntDest(connections)
+    #Parses packet
+    datagrams = parseData(packet) 
+    #Obtains Intermediate Destination Address and rtt count
+    IntDests, rttCount = getIntDest(datagrams)
+    #Obtains the number of fragments in the datagram
     fragCount = getFragments(datagrams)
-    rttCount = getRTT(connections)
-    sdCount = getSD(rttCount)
-    print(getTrace(datagrams, fragCount, rttCount, IntDests, sdCount))
+    #Prints the trace information
+    print(getTrace(datagrams, fragCount, rttCount, IntDests))
 
 
 if __name__ == "__main__":

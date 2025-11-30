@@ -17,7 +17,7 @@ class IPPacket:
         """Parse IP packet"""
         if len(data) < 20:
             raise ValueError("Incomplete IP header")
-
+        
         version_ihl = data[0]
         if isinstance(version_ihl, str):
             # Converts string byte to integer
