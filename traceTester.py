@@ -7,10 +7,10 @@ class Packet:
     def __init__(self, ts_sec, ts_usec, packet, raw_bytes):
         self.ts_sec = ts_sec
         self.ts_usec = ts_usec
-        self.packet = packet              # IPPacket object
-        self.raw = raw_bytes              # REAL IP bytes
-        self.ip_header = raw_bytes[:packet.header_length]  # REAL IP header
-        self.payload = packet.payload     # transport payload (ICMP/UDP)
+        self.packet = packet              
+        self.raw = raw_bytes             
+        self.ip_header = raw_bytes[:packet.header_length]  
+        self.payload = packet.payload     
         self.src_addr = packet.src_ip
         self.dest_addr = packet.dst_ip
         self.protocol = packet.protocol
